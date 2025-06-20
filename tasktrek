@@ -1,0 +1,34 @@
+#!/bin/bash
+
+# TaskTrek - CLI Task Manager
+# Version 0.1.0
+
+# Load library
+source "$(dirname "$0")/tasktrek-lib.sh"
+
+# Initialize system
+init_tasktrek
+
+# Parse command
+case $1 in
+    add)
+        shift
+        add_task "$@"
+        ;;
+    list)
+        shift
+        list_tasks "$@"
+        ;;
+    complete)
+        shift
+        complete_task "$@"
+        ;;
+    summary)
+        shift
+        show_summary "$@"
+        ;;
+    *)
+        show_help
+        exit 1
+        ;;
+esac
