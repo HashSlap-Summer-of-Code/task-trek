@@ -1,34 +1,122 @@
 #!/bin/bash
 
-# TaskTrek - CLI Task Manager
-# Version 0.1.0
+# TaskTrek - Recurring Task Management System
+# Main executable script
 
-# Load library
-source "$(dirname "$0")/tasktrek-lib.sh"
+set -e
 
-# Initialize system
-init_tasktrek
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Parse command
-case $1 in
-    add)
+# Source the library
+source "$SCRIPT_DIR/tasktrek-lib.sh"
+
+# Initialize data directory and file
+init_data_file
+
+# Usage function
+usage() {
+    cat << EOF
+TaskTrek - Recurring Task Management System
+
+Usage: $0 <command> [options]
+
+Commands:
+    add <title> [description] [--recur <frequency>]
+        Add a new task. Frequency: daily, weekly, monthly
+    
+    list [--all]
+        List pending tasks (--all shows completed too)
+    
+    complete <id>
+        Mark task as complete (regenerates if recurring)
+    
+    delete <id>
+        Delete a task permanently
+    
+    help
+        Show this help message
+
+Examples:
+    $0 add "Daily standup" "Team meeting" --recur daily
+    $0 add "Weekly review" --recur weekly
+    $0 list
+    $0 complete 1
+    $0 delete 2
+
+EOF
+}
+
+# Parse command line arguments
+case "${1:-}" in
+    "add")
         shift
-        add_task "$@"
-        ;;
-    list)
+        title="$1"
+        description="${2:-}"
+        recur_freq=""
+        
+        # Parse remaining arguments for --recur flag
         shift
-        list_tasks "$@"
+        if [[ "${1:-}" != "" ]]; then
+            if [[ "$1" != "--recur" ]]; then
+                description="$1"
+                shift
+            fi
+        fi
+        
+        if [[ "${1:-}" == "--recur" ]]; then
+            recur_freq="${2:-}"
+            if [[ ! "$recur_freq" =~ ^(daily|weekly|monthly)$ ]]; then
+                echo "Error: Invalid recurrence frequency. Use: daily, weekly, monthly"
+                exit 1
+            fi
+        fi
+        
+        if [[ -z "$title" ]]; then
+            echo "Error: Task title is required"
+            usage
+            exit 1
+        fi
+        
+        add_task "$title" "$description" "$recur_freq"
         ;;
-    complete)
-        shift
-        complete_task "$@"
+    
+    "list")
+        regenerate_recurring_tasks
+        show_all="false"
+        if [[ "${2:-}" == "--all" ]]; then
+            show_all="true"
+        fi
+        list_tasks "$show_all"
         ;;
-    summary)
-        shift
-        show_summary "$@"
+    
+    "complete")
+        task_id="${2:-}"
+        if [[ -z "$task_id" ]]; then
+            echo "Error: Task ID is required"
+            usage
+            exit 1
+        fi
+        complete_task "$task_id"
         ;;
+    
+    "delete")
+        task_id="${2:-}"
+        if [[ -z "$task_id" ]]; then
+            echo "Error: Task ID is required"
+            usage
+            exit 1
+        fi
+        delete_task "$task_id"
+        ;;
+    
+    "help"|"--help"|"-h")
+        usage
+        ;;
+    
     *)
-        show_help
+        echo "Error: Unknown command '${1:-}'"
+        usage
         exit 1
         ;;
 esac
