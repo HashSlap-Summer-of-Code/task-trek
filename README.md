@@ -109,6 +109,17 @@ chmod +x lib/*.sh
 # Weekly Time Report (Jun 14-20, 2025)
 # Total time: 8h 45m
 # Tasks worked on: 3
+
+# Delete a task by ID
+./tasktrek delete 1
+# ✅ Task with ID '1' deleted successfully
+# If no ID is provided
+./tasktrek delete
+# ❌ Please provide a task ID.
+# If the task ID doesn't exist
+./tasktrek delete abc123
+# ❌ Task ID 'abc123' does not exist.
+
 ```
 
 ## 🔄 Timer Features

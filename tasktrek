@@ -12,7 +12,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/tasktrek-lib.sh"
 
 # Initialize data directory and file
-init_data_file
+init_tasktrek() {
+    mkdir -p "$SCRIPT_DIR/data"
+    if [[ ! -f "$TASKS_FILE" ]]; then
+        echo '{"tasks": [], "next_id": 1}' > "$TASKS_FILE"
+    fi
+}
 
 # Usage function
 usage() {
