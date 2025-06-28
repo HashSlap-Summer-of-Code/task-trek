@@ -1,198 +1,253 @@
 #!/bin/bash
 
+# TaskTrek Library - Core functions for task management
+# This file contains all the core functionality
+
 # Configuration
-DATA_DIR="$(dirname "$0")/data"
-CONFIG_DIR="$(dirname "$0")/config"
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+DATA_DIR="$SCRIPT_DIR/data"
 TASKS_FILE="$DATA_DIR/tasks.json"
+CONFIG_DIR="$SCRIPT_DIR/config"
 CONFIG_FILE="$CONFIG_DIR/settings.cfg"
 
-# Initialize TaskTrek
-init_tasktrek() {
-    # Create directories if needed
-    mkdir -p "$DATA_DIR"
+# Load or initialize configuration
+load_config() {
     mkdir -p "$CONFIG_DIR"
-    
-    # Create files if needed
-    [ -f "$TASKS_FILE" ] || echo "[]" > "$TASKS_FILE"
-    [ -f "$CONFIG_FILE" ] || {
-        echo "# TaskTrek Configuration" > "$CONFIG_FILE"
-        echo "priority_colors=true" >> "$CONFIG_FILE"
-        echo "date_format=%Y-%m-%d" >> "$CONFIG_FILE"
-    }
-    
-    # Load configuration
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        cat > "$CONFIG_FILE" <<EOF
+priority_colors=true
+date_format="%Y-%m-%d %H:%M"
+EOF
+    fi
     source "$CONFIG_FILE"
+}
+
+# Initialize data file
+init_data_file() {
+    mkdir -p "$DATA_DIR"
+    if [[ ! -f "$TASKS_FILE" ]]; then
+        echo '{"tasks": [], "next_id": 1}' > "$TASKS_FILE"
+    fi
+}
+
+# Get current timestamp in ISO 8601 format
+get_timestamp() {
+    date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+# Calculate next occurrence based on frequency
+calculate_next_occurrence() {
+    local frequency="$1"
+    local current_date="$2"
+    
+    case "$frequency" in
+        "daily")
+            date -d "$current_date + 1 day" -u +"%Y-%m-%dT%H:%M:%SZ"
+            ;;
+        "weekly")
+            date -d "$current_date + 1 week" -u +"%Y-%m-%dT%H:%M:%SZ"
+            ;;
+        "monthly")
+            date -d "$current_date + 1 month" -u +"%Y-%m-%dT%H:%M:%SZ"
+            ;;
+        *)
+            echo "$current_date"
+            ;;
+    esac
+}
+
+# Get next ID from JSON
+get_next_id() {
+    jq -r '.next_id' "$TASKS_FILE"
 }
 
 # Add a new task
 add_task() {
-    local description=""
-    local priority="medium"
-    local due_date=""
+    local title="$1"
+    local description="$2"
+    local recur_freq="$3"
+    local priority="${4:-medium}"  # Default to medium priority
     
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --priority)
-                priority="$2"
-                shift 2
-                ;;
-            --due)
-                due_date="$2"
-                shift 2
-                ;;
-            *)
-                description="$1"
-                shift
-                ;;
-        esac
-    done
-    
-    # Validate input
-    if [ -z "$description" ]; then
-        echo "Error: Task description is required"
-        exit 1
-    fi
+    local task_id=$(get_next_id)
+    local timestamp=$(get_timestamp)
+    local temp_file=$(mktemp)
     
     # Create task object
-    local task_id=$(date +%s)
-    local task_json=$(jq -n \
-        --arg id "$task_id" \
-        --arg desc "$description" \
-        --arg pri "$priority" \
-        --arg due "$due_date" \
-        --arg status "pending" \
-        --arg created "$(date +"$date_format")" \
-        '{id: $id, description: $desc, priority: $pri, due_date: $due, status: $status, created: $created}')
+    local task_json="{
+        \"id\": $task_id,
+        \"title\": \"$title\",
+        \"description\": \"$description\",
+        \"priority\": \"$priority\",
+        \"status\": \"pending\",
+        \"created\": \"$timestamp\",
+        \"due\": null"
     
-    # Add to tasks file
-    local tasks=$(cat "$TASKS_FILE")
-    echo "$tasks" | jq --argjson task "$task_json" '. += [$task]' > "$TASKS_FILE"
+    # Add recurring properties if specified
+    if [[ -n "$recur_freq" ]]; then
+        local next_occurrence=$(calculate_next_occurrence "$recur_freq" "$timestamp")
+        task_json="$task_json,
+        \"recurring\": {
+            \"enabled\": true,
+            \"frequency\": \"$recur_freq\",
+            \"interval\": 1,
+            \"next_occurrence\": \"$next_occurrence\"
+        }"
+    else
+        task_json="$task_json,
+        \"recurring\": {
+            \"enabled\": false
+        }"
+    fi
     
-    echo "✅ Task added with ID: $task_id"
+    task_json="$task_json}"
+    
+    # Add task to JSON and update next_id
+    jq ".tasks += [$task_json] | .next_id = $((task_id + 1))" "$TASKS_FILE" > "$temp_file"
+    mv "$temp_file" "$TASKS_FILE"
+    
+    echo "✅ Task added: #$task_id - $title"
+    echo "  Priority: $priority"
+    if [[ -n "$recur_freq" ]]; then
+        echo "  Recurrence: $recur_freq"
+    fi
 }
 
-# Function to implement colored output for task priorities
-print_colored_tasks() {
-    line=$1   # Needs the line as input, which we need to print
-    priority=$2
-
+# Get ANSI color code for priority
+get_priority_color() {
+    local priority="$1"
     case $priority in
         high|High)
-            color="\033[0;31m"
-        ;;
+            echo -e "\033[0;31m"  # Red
+            ;;
         medium|Medium)
-            color="\033[0;33m"
-        ;;
+            echo -e "\033[0;33m"  # Yellow
+            ;;
         low|Low)
-            color="\033[0;32m"
-        ;;
+            echo -e "\033[0;32m"  # Green
+            ;;
+        *)
+            echo -e "\033[0m"     # Default
+            ;;
     esac
-
-    echo -e "${color}${line}"
 }
 
-# List tasks
+# List tasks with colored output
 list_tasks() {
-    local filter="all"
+    local show_all="$1"
+    local filter="pending"
+    local color_reset="\033[0m"
     
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --priority)
-                filter="priority"
-                priority_filter="$2"
-                shift 2
-                ;;
-            *)
-                shift
-                ;;
-        esac
-    done
+    if [[ "$show_all" == "true" ]]; then
+        filter=""
+    fi
     
-    # Load tasks
-    local tasks=$(cat "$TASKS_FILE")
+    echo "📋 TaskTrek - Task List"
+    echo "======================="
     
-    # Apply filter
-    case $filter in
-        all)
-            filtered_tasks="$tasks"
-            ;;
-        priority)
-            filtered_tasks=$(echo "$tasks" | jq --arg pri "$priority_filter" 'map(select(.priority == $pri))')
-            ;;
-    esac
+    local tasks_found=false
     
-    # Format output
-    echo -e "$filtered_tasks" | jq -r '.[] | "\(.id) | \(.description) | Priority: \(.priority) | Due: \(.due_date) | Status: \(.status)"' |
-    # This data is utilized for accessing priority field
-    while IFS='|' read -r id description priority due_date status; do
-        line="$id | $description | Priority: $priority | Due: $due_date | Status: $status"
-
-        if [ "$priority_colors" == "true" ]; then
-            print_colored_tasks "$line" "$priority"
-        else
-            echo "$line"
+    # Get tasks based on filter
+    if [[ -z "$filter" ]]; then
+        task_data=$(jq -r '.tasks[] | "\(.id)|\(.title)|\(.description)|\(.priority)|\(.status)|\(.recurring.enabled)|\(.recurring.frequency // "none")|\(.recurring.next_occurrence // "")"' "$TASKS_FILE")
+    else
+        task_data=$(jq -r ".tasks[] | select(.status == \"$filter\") | \"\(.id)|\(.title)|\(.description)|\(.priority)|\(.status)|\(.recurring.enabled)|\(.recurring.frequency // \"none\")|\(.recurring.next_occurrence // \"\")\"" "$TASKS_FILE")
+    fi
+    
+    while IFS='|' read -r id title desc priority status is_recurring freq next_occur; do
+        tasks_found=true
+        color_code=$(get_priority_color "$priority")
+        
+        echo ""
+        echo -e "${color_code}[$id] $title${color_reset}"
+        if [[ -n "$desc" && "$desc" != "null" ]]; then
+            echo -e "  ${color_code}Description: $desc${color_reset}"
         fi
+        echo -e "  ${color_code}Priority: $priority${color_reset}"
+        echo -e "  ${color_code}Status: $status${color_reset}"
+        
+        if [[ "$is_recurring" == "true" ]]; then
+            echo -e "  ${color_code}Recurring: $freq${color_reset}"
+            if [[ -n "$next_occur" && "$next_occur" != "null" ]]; then
+                local formatted_date=$(date -d "$next_occur" +"$date_format" 2>/dev/null || echo "$next_occur")
+                echo -e "  ${color_code}Next occurrence: $formatted_date${color_reset}"
+            fi
+        fi
+    done <<< "$task_data"
 
-    done
-
+    if [[ "$tasks_found" != "true" ]]; then
+        echo ""
+        echo "No tasks found. Enjoy your free time! 🎉"
+    fi
 }
 
 # Complete a task
 complete_task() {
     local task_id="$1"
+    local temp_file=$(mktemp)
     
-    if [ -z "$task_id" ]; then
-        echo "Error: Task ID is required"
-        exit 1
+    # Check if task exists
+    local task_exists=$(jq -r ".tasks[] | select(.id == $task_id) | .id" "$TASKS_FILE")
+    if [[ -z "$task_exists" ]]; then
+        echo "❌ Error: Task #$task_id not found"
+        return 1
     fi
     
-    # Update task status
-    local tasks=$(cat "$TASKS_FILE")
-    local updated_tasks=$(echo "$tasks" | jq --arg id "$task_id" '
-        map(if .id == $id then .status = "completed" else . end)')
+    # Get task details for recurring check
+    local is_recurring=$(jq -r ".tasks[] | select(.id == $task_id) | .recurring.enabled" "$TASKS_FILE")
+    local frequency=$(jq -r ".tasks[] | select(.id == $task_id) | .recurring.frequency" "$TASKS_FILE")
+    local title=$(jq -r ".tasks[] | select(.id == $task_id) | .title" "$TASKS_FILE")
+    local description=$(jq -r ".tasks[] | select(.id == $task_id) | .description" "$TASKS_FILE")
+    local priority=$(jq -r ".tasks[] | select(.id == $task_id) | .priority" "$TASKS_FILE")
     
-    echo "$updated_tasks" > "$TASKS_FILE"
-    echo "✅ Task $task_id marked as completed"
+    # Mark task as completed
+    jq "(.tasks[] | select(.id == $task_id) | .status) = \"completed\"" "$TASKS_FILE" > "$temp_file"
+    mv "$temp_file" "$TASKS_FILE"
+    
+    echo "✅ Task #$task_id completed: $title"
+    
+    # If recurring, create new instance
+    if [[ "$is_recurring" == "true" && "$frequency" != "null" ]]; then
+        echo "🔄 Regenerating recurring task..."
+        add_task "$title" "$description" "$frequency" "$priority"
+    fi
 }
 
-# Show summary
-show_summary() {
-    local tasks=$(cat "$TASKS_FILE")
+# Delete a task
+delete_task() {
+    local task_id="$1"
     
-    # Count tasks
-    local total=$(echo "$tasks" | jq 'length')
-    local completed=$(echo "$tasks" | jq 'map(select(.status == "completed")) | length')
-    local pending=$(echo "$tasks" | jq 'map(select(.status == "pending")) | length')
-    
-    # Today's tasks
-    local today=$(date +"$date_format")
-    local today_tasks=$(echo "$tasks" | jq --arg today "$today" '
-        map(select(.due_date == $today and .status == "pending")) | length')
-    
-    # Print summary
-    echo "📊 TaskTrek Summary"
-    echo "-------------------"
-    echo "Total tasks: $total"
-    echo "Completed: $completed"
-    echo "Pending: $pending"
-    echo "Due today: $today_tasks"
-    echo ""
-    echo "🚀 Keep going! You've got this!"
+    if [[ -z "$task_id" ]]; then
+        echo "❌ Error: Please provide a task ID."
+        return 1
+    fi
+
+    local temp_file=$(mktemp)
+
+    # Check if task exists
+    local task_exists=$(jq -r ".tasks[] | select(.id == $task_id) | .id" "$TASKS_FILE")
+    if [[ -z "$task_exists" ]]; then
+        echo "❌ Error: Task ID '$task_id' does not exist."
+        return 1
+    fi
+
+    local title=$(jq -r ".tasks[] | select(.id == $task_id) | .title" "$TASKS_FILE")
+
+    # Remove task from JSON
+    jq "del(.tasks[] | select(.id == $task_id))" "$TASKS_FILE" > "$temp_file"
+    mv "$temp_file" "$TASKS_FILE"
+
+    echo "✅ Task #$task_id deleted: \"$title\""
 }
 
-# Show help
-show_help() {
-    echo "TaskTrek - CLI Task Manager"
-    echo "Usage:"
-    echo "  tasktrek add \"<description>\" [--priority <high|medium|low>] [--due <YYYY-MM-DD>]"
-    echo "  tasktrek list [--priority <high|medium|low>]"
-    echo "  tasktrek complete <task_id>"
-    echo "  tasktrek summary"
-    echo ""
-    echo "Examples:"
-    echo "  tasktrek add \"Fix login bug\" --priority high"
-    echo "  tasktrek list --priority high"
-    echo "  tasktrek complete 1234567890"
-}
+# Main initialization
+load_config
+init_data_file
+
+# Check if jq is available
+if ! command -v jq &> /dev/null; then
+    echo "❌ Error: jq is required but not installed. Please install jq to use TaskTrek."
+    echo "  On Ubuntu/Debian: sudo apt-get install jq"
+    echo "  On macOS: brew install jq"
+    echo "  On Fedora: sudo dnf install jq"
+    exit 1
+fi
