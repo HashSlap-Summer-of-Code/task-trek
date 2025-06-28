@@ -72,6 +72,26 @@ add_task() {
     echo "✅ Task added with ID: $task_id"
 }
 
+# Function to implement colored output for task priorities
+print_colored_tasks() {
+    line=$1   # Needs the line as input, which we need to print
+    priority=$2
+
+    case $priority in
+        high|High)
+            color="\033[0;31m"
+        ;;
+        medium|Medium)
+            color="\033[0;33m"
+        ;;
+        low|Low)
+            color="\033[0;32m"
+        ;;
+    esac
+
+    echo -e "${color}${line}"
+}
+
 # List tasks
 list_tasks() {
     local filter="all"
@@ -104,8 +124,19 @@ list_tasks() {
     esac
     
     # Format output
-    echo "$filtered_tasks" | jq -r '.[] | 
-        "\(.id) | \(.description) | Priority: \(.priority) | Due: \(.due_date) | Status: \(.status)"'
+    echo -e "$filtered_tasks" | jq -r '.[] | "\(.id) | \(.description) | Priority: \(.priority) | Due: \(.due_date) | Status: \(.status)"' |
+    # This data is utilized for accessing priority field
+    while IFS='|' read -r id description priority due_date status; do
+        line="$id | $description | Priority: $priority | Due: $due_date | Status: $status"
+
+        if [ "$priority_colors" == "true" ]; then
+            print_colored_tasks "$line" "$priority"
+        else
+            echo "$line"
+        fi
+
+    done
+
 }
 
 # Complete a task
